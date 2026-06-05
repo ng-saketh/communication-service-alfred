@@ -1,0 +1,30 @@
+{
+  "name": "communication-backend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Unified communication backend for email and Slack OAuth/messaging",
+  "main": "dist/server.js",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.832.0",
+    "@aws-sdk/client-ssm": "^3.832.0",
+    "@aws-sdk/lib-dynamodb": "^3.832.0",
+    "@azure/msal-node": "^5.2.2",
+    "@sendgrid/mail": "^8.1.5",
+    "axios": "^1.9.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.5.0",
+    "express": "^4.21.2"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.1",
+    "@types/node": "^22.15.19",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.3"
+  }
+}
