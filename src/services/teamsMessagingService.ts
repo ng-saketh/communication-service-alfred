@@ -24,6 +24,10 @@ function getGraphErrorMessage(data: GraphApiResponse | null, fallback: string): 
   return data?.error?.message || fallback;
 }
 
+function encodeGraphPathSegment(value: string): string {
+  return encodeURIComponent(value);
+}
+
 async function parseJsonSafe<T>(response: Response): Promise<T | null> {
   const text = await response.text();
   if (!text) {
@@ -37,7 +41,7 @@ async function parseJsonSafe<T>(response: Response): Promise<T | null> {
   }
 }
 
-function parseFilePayload(file?: SendFilePayload): { fileName: string } | null {
+function parseFilePayload(file?: SendFilePayload): { fileName: string; mimeType: string; contentBase64: string } | null {
   if (!file) {
     return null;
   }
@@ -62,7 +66,91 @@ function parseFilePayload(file?: SendFilePayload): { fileName: string } | null {
     throw new Error("Decoded file content is empty");
   }
 
-  return { fileName };
+  return {
+    fileName,
+    mimeType,
+    contentBase64: normalizedBase64,
+  };
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function buildTeamsMessageBody(message: string, parsedFile: { fileName: string; mimeType: string; contentBase64: string } | null): {
+  body: {
+    contentType: "html";
+    content: string;
+  };
+  hostedContents?: Array<{
+    "@microsoft.graph.temporaryId": string;
+    contentBytes: string;
+    contentType: string;
+  }>;
+} {
+  const normalizedMessage = message.trim();
+
+  if (!parsedFile) {
+    return {
+      body: {
+        contentType: "html",
+        content: normalizedMessage || "&nbsp;",
+      },
+    };
+  }
+
+  // Teams can render inline images through hostedContents.
+  if (parsedFile.mimeType === "image/png") {
+    const contentParts: string[] = [];
+    if (normalizedMessage) {
+      contentParts.push(escapeHtml(normalizedMessage));
+    }
+    contentParts.push(`<img alt="${escapeHtml(parsedFile.fileName)}" src="../hostedContents/1/$value" />`);
+
+    return {
+      body: {
+        contentType: "html",
+        content: contentParts.join("<br/><br/>"),
+      },
+      hostedContents: [
+        {
+          "@microsoft.graph.temporaryId": "1",
+          contentBytes: parsedFile.contentBase64,
+          contentType: parsedFile.mimeType,
+        },
+      ],
+    };
+  }
+
+  const pdfNotice = `<strong>File attachment:</strong> ${escapeHtml(parsedFile.fileName)}`;
+  return {
+    body: {
+      contentType: "html",
+      content: normalizedMessage ? `${escapeHtml(normalizedMessage)}<br/><br/>${pdfNotice}` : pdfNotice,
+    },
+  };
+}
+
+async function getTeamsChatMembers(accessToken: string, chatId: string) {
+  const bearerToken = requireAccessToken(accessToken, "Teams");
+  const res = await fetch(`${GRAPH_API}/me/chats/${chatId}/members`, {
+    headers: {
+      Authorization: `Bearer ${bearerToken}`,
+      "Content-Type": "application/json",
+    },
+  });
+
+  if (!res.ok) {
+    return [];
+  }
+
+  const data = (await res.json()) as { value?: Array<{ displayName?: string; id?: string }> };
+  return data.value ?? [];
 }
 
 export async function getTeamsChats(accessToken: string) {
@@ -74,12 +162,44 @@ export async function getTeamsChats(accessToken: string) {
     },
   });
 
-  const data = (await res.json()) as { ok?: boolean; value?: unknown[]; error?: unknown };
+  const data = (await res.json()) as { ok?: boolean; value?: Array<{ id?: string; topic?: string | null; chatType?: string; [key: string]: unknown }>; error?: unknown };
   if (!res.ok) {
     throw new Error(`Teams API error (${res.status})`);
   }
 
-  return data.value ?? [];
+  const chats = data.value ?? [];
+
+  // Fetch members for each chat to get colleague names for one-on-one chats
+  const chatsWithMembers = await Promise.all(
+    chats.map(async (chat) => {
+      if (!chat.id) return chat;
+
+      try {
+        const members = await getTeamsChatMembers(accessToken, chat.id);
+        
+        // For one-on-one chats (topic is null), use the colleague's displayName
+        let displayName = chat.topic;
+        if (!displayName && members.length > 0) {
+          // Find the first member who is not the current user (excluding self)
+          const colleague = members.find((m) => m.displayName);
+          if (colleague) {
+            displayName = colleague.displayName;
+          }
+        }
+
+        return {
+          ...chat,
+          displayName,
+          members,
+        };
+      } catch {
+        // If member fetch fails, return chat with original data
+        return chat;
+      }
+    })
+  );
+
+  return chatsWithMembers;
 }
 
 export async function getTeamsChannels(accessToken: string) {
@@ -149,32 +269,14 @@ export async function sendTeamsMessage(input: TeamsSendInput) {
 
   let endpoint = "";
   if (input.destinationType === "chat") {
-    endpoint = `${GRAPH_API}/chats/${destinationId}/messages`;
+    endpoint = `${GRAPH_API}/chats/${encodeGraphPathSegment(destinationId)}/messages`;
   } else if (input.destinationType === "channel" && input.teamId) {
-    endpoint = `${GRAPH_API}/teams/${input.teamId}/channels/${destinationId}/messages`;
+    endpoint = `${GRAPH_API}/teams/${encodeGraphPathSegment(input.teamId)}/channels/${encodeGraphPathSegment(destinationId)}/messages`;
   } else {
     throw new Error("Invalid destination type or missing teamId for channel");
   }
 
-  // Build message body
-  const messageBody: {
-    body: {
-      contentType: "html";
-      content: string;
-    };
-  } = {
-    body: {
-      contentType: "html",
-      content: message || "&nbsp;",
-    },
-  };
-
-  // If we have a file, we'll need to handle it differently
-  if (parsedFile) {
-    // For Teams, we need to create the message first, then add the attachment
-    // This is a simplified approach - a full implementation would handle inline attachments
-    messageBody.body.content = `${message}<br/><br/><strong>File attachment:</strong> ${parsedFile.fileName}`;
-  }
+  const messageBody = buildTeamsMessageBody(message, parsedFile);
 
   const res = await fetch(endpoint, {
     method: "POST",
@@ -188,7 +290,14 @@ export async function sendTeamsMessage(input: TeamsSendInput) {
   const data = (await parseJsonSafe<GraphApiResponse & { id?: string }>(res)) || { error: { message: "invalid_response" } };
 
   if (!res.ok || data.error) {
-    throw new Error(getGraphErrorMessage(data, `Teams API error (${res.status})`));
+    const graphMessage = getGraphErrorMessage(data, `Teams API error (${res.status})`);
+    if (graphMessage === "NotFound") {
+      throw new Error(
+        `NotFound: Teams destination '${destinationId}' was not found. Ensure the full destination id from /teams/chats or /teams/channels is sent (not a truncated value like '19').`
+      );
+    }
+
+    throw new Error(graphMessage);
   }
 
   return {
