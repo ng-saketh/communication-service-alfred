@@ -489,6 +489,37 @@ export async function getTeamsChannels(accessToken: string) {
   return channels;
 }
 
+export async function getTeamsGroups(accessToken: string) {
+  const [chats, channels] = await Promise.all([
+    getTeamsChats(accessToken),
+    getTeamsChannels(accessToken),
+  ]);
+
+  // Filter chats to only non-oneOnOne (group and meeting chats)
+  const groupChats = chats
+    .filter((chat) => chat.chatType !== "oneOnOne" && chat.id)
+    .map((chat) => ({
+      id: chat.id,
+      displayName: chat.displayName || chat.topic || "Unnamed Group",
+      type: "chat",
+    }));
+
+  // Rename channels to include teamDisplayName for context
+  const formattedChannels = channels.map((channel) => ({
+    id: channel.id,
+    displayName: channel.teamDisplayName ? `${channel.teamDisplayName} - ${channel.displayName}` : channel.displayName,
+    type: "channel",
+    teamId: channel.teamId,
+  }));
+
+  // Combine group chats and channels, sorted by displayName
+  const groups = [...groupChats, ...formattedChannels].sort((a, b) =>
+    (a.displayName || "").localeCompare(b.displayName || "")
+  );
+
+  return groups;
+}
+
 export async function sendTeamsMessage(input: TeamsSendInput) {
   const bearerToken = requireAccessToken(input.accessToken, "Teams");
   const destinationId = String(input.destinationId || "").trim();
