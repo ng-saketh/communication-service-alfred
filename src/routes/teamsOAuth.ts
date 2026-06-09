@@ -2,7 +2,7 @@ import { Router } from "express";
 import crypto from "crypto";
 import { config } from "../config";
 import { exchangeCodeForTokens, generatePkceCodes, getTeamsAuthUrl } from "../services/msalClient";
-import { getProviderCredentialRecord, persistProviderCredentials } from "../services/credentialStore";
+import { getProviderCredentialRecord, persistProviderCredentials, disconnectProvider } from "../services/credentialStore";
 import { signState, verifyState } from "../state";
 
 export const teamsOAuthRouter = Router();
@@ -161,6 +161,22 @@ teamsOAuthRouter.get("/status", async (req, res) => {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to fetch Teams status";
+    return res.status(400).json({ status: "error", message });
+  }
+});
+
+teamsOAuthRouter.post("/disconnect", async (req, res) => {
+  try {
+    const organizationId = String(req.body.organizationId || "").trim();
+    if (!organizationId) {
+      return res.status(400).json({ status: "error", message: "organizationId is required" });
+    }
+
+    await disconnectProvider("teams", organizationId);
+    return res.status(200).json({ status: "success", message: "Teams disconnected successfully" });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to disconnect Teams";
+    console.error("Teams disconnect error:", message);
     return res.status(400).json({ status: "error", message });
   }
 });

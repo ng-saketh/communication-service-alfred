@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { getTeamsChats, getTeamsChannels, sendTeamsMessage } from "../services/teamsMessagingService";
+import { getTeamsChats, getTeamsChannels, getTeamsPeople, sendTeamsMessage } from "../services/teamsMessagingService";
 import { getTeamsCredentials } from "../services/credentialStore";
 import { getOrganizationIdFromRequest } from "../utils/requestContext";
 
@@ -25,6 +25,18 @@ teamsMessagingRouter.get("/channels", async (req, res) => {
     return res.status(200).json({ channels });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to list Teams channels";
+    return res.status(400).json({ status: "error", message });
+  }
+});
+
+teamsMessagingRouter.get("/people", async (req, res) => {
+  try {
+    const organizationId = getOrganizationIdFromRequest(req);
+    const { accessToken } = await getTeamsCredentials(organizationId);
+    const people = await getTeamsPeople(accessToken);
+    return res.status(200).json({ people });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to list Teams people";
     return res.status(400).json({ status: "error", message });
   }
 });

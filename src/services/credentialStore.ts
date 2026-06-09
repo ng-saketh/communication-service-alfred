@@ -5,10 +5,12 @@ import {
   DynamoDBDocumentClient,
   GetCommand,
   PutCommand,
+  DeleteCommand,
 } from "@aws-sdk/lib-dynamodb";
 import {
   GetParameterCommand,
   PutParameterCommand,
+  DeleteParameterCommand,
   SSMClient,
 } from "@aws-sdk/client-ssm";
 
@@ -152,4 +154,40 @@ export async function getTeamsCredentials(organizationId: string): Promise<Teams
   }
 
   return payload;
+}
+
+export async function disconnectProvider(provider: Provider, organizationId: string): Promise<void> {
+  const normalizedOrg = assertOrganizationId(organizationId);
+
+  // Get the credential record to find the SSM parameter name
+  const record = await getProviderCredentialRecord(provider, normalizedOrg);
+  if (!record) {
+    // Already disconnected, no error
+    return;
+  }
+
+  // Delete from SSM (SecureString parameter)
+  try {
+    await ssm.send(
+      new DeleteParameterCommand({
+        Name: record.parameterName,
+      })
+    );
+  } catch (error) {
+    // If parameter doesn't exist, that's fine
+    if (error instanceof Error && !error.message.includes("ParameterNotFound")) {
+      throw error;
+    }
+  }
+
+  // Delete from DynamoDB
+  await ddb.send(
+    new DeleteCommand({
+      TableName: config.communicationTokensTableName,
+      Key: {
+        organizationId: normalizedOrg,
+        provider,
+      },
+    })
+  );
 }

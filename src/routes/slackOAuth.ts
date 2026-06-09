@@ -3,7 +3,7 @@ import { Router } from "express";
 
 import { config } from "../config";
 import { signState, verifyState } from "../state";
-import { getProviderCredentialRecord, persistProviderCredentials } from "../services/credentialStore";
+import { getProviderCredentialRecord, persistProviderCredentials, disconnectProvider } from "../services/credentialStore";
 import { exchangeCodeForTokens } from "../services/slackOAuthService";
 
 export const slackOAuthRouter = Router();
@@ -122,6 +122,22 @@ slackOAuthRouter.get("/status", async (req, res) => {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to fetch Slack status";
+    return res.status(400).json({ status: "error", message });
+  }
+});
+
+slackOAuthRouter.post("/disconnect", async (req, res) => {
+  try {
+    const organizationId = String(req.body.organizationId || "").trim();
+    if (!organizationId) {
+      return res.status(400).json({ status: "error", message: "organizationId is required" });
+    }
+
+    await disconnectProvider("slack", organizationId);
+    return res.status(200).json({ status: "success", message: "Slack disconnected successfully" });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to disconnect Slack";
+    console.error("Slack disconnect error:", message);
     return res.status(400).json({ status: "error", message });
   }
 });
